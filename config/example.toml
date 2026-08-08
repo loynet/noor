@@ -1,0 +1,57 @@
+[telegram]
+# The single Telegram channel or chat where Noor posts every notification.
+# Use a negative ID for channels and supergroups.
+notification_chat_id = 123456789
+
+[ptchan]
+# Public ptchan URL, used only when formatting a thread link.
+base_url = "https://ptchan.org"
+
+[gateway]
+# The webhook secret comes from PTCHAN_INTEGRATION_<NAME>_SECRET.
+integration_name = "noor"
+
+[gateway.webhook]
+# Used only when the threads watcher is enabled.
+addr = ":8081"
+
+[threads]
+# Enable signed gateway thread-event observation.
+enabled = true
+# Queue one notification after this many observed reply posts.
+min_reply_posts = 10
+# Case-insensitive subject/message fragments that make a thread ineligible.
+keyword_denylist = []
+# Set to "0s" to disable the age filter.
+max_thread_age = "0s"
+
+[streams]
+# Enable periodic stream liveness observation.
+enabled = true
+# Delay between liveness probes for every configured channel.
+poll_interval = "1m"
+
+[[streams.channel]]
+# Stable local identity for this stream. It persists across URL changes and is
+# distinct from either URL below.
+key = "main"
+# Machine-facing endpoint where HTTP 200 means the stream is live.
+probe_url = "https://stream.example.com/main/llhls.m3u8"
+# Human-facing page sent in the notification.
+page_url = "https://example.com/main"
+
+[storage]
+# Relative paths are resolved from Noor's working directory. Docker mounts its
+# persistent volume at /app/data, so this default stores SQLite in that volume.
+sqlite_path = "data/noor.db"
+
+[retention]
+# Completed Telegram deliveries and inactive threads/event receipts are retained
+# for this long. Pending notifications are never pruned. Gateway events older
+# than this are acknowledged and ignored, which bounds supported catch-up time.
+completed_after = "168h"
+
+[runtime]
+# Health, readiness, and Prometheus metrics endpoint. Keep it on an internal
+# network unless a deliberate ingress or Prometheus scrape path is configured.
+http_addr = ":9090"

@@ -1,0 +1,7 @@
+.git/
+.gocache/
+.agents/
+.env.*
+!.env.example
+data/
+noor
