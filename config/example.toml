@@ -2,6 +2,8 @@
 # The single Telegram channel or chat where Noor posts every notification.
 # Use a negative ID for channels and supergroups.
 notification_chat_id = 123456789
+# Notification language. Supported values: en, pt-PT.
+locale = "en"
 
 [ptchan]
 # Public ptchan URL, used only when formatting a thread link.
@@ -18,7 +20,7 @@ addr = ":8081"
 [threads]
 # Enable signed gateway thread-event observation.
 enabled = true
-# Queue one notification after this many observed reply posts.
+# Queue one notification after this many observed reply posts. Must be at least 1.
 min_reply_posts = 10
 # Case-insensitive subject/message fragments that make a thread ineligible.
 keyword_denylist = []

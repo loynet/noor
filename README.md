@@ -74,6 +74,17 @@ announcement after the thread reaches its reply threshold. Keyword deny lists,
 an optional maximum thread age, and the threshold are explicit product policy.
 Board admission belongs to ptchan-gateway's integration policy.
 
+Noor records one immutable snapshot when every
+gateway-observed thread reaches the configured threshold, including threads
+that notification policy filters out. It compares snapshots at that same
+threshold against the prior rolling 30 days (with at least 10 prior snapshots)
+and may add one localized highlight for speed, acceleration, Capcode or Marta
+activity, long replies, or attachments. Snapshot retention is always 30 days,
+independently of event-receipt retention.
+
+`threads.min_reply_posts` must be at least 1. Telegram notifications use
+English by default; set `telegram.locale` to `pt-PT` for Portuguese.
+
 It counts unique observed reply events rather than reading the thread for every
 event. Gateway delivery is best-effort ordered, so a short disruption may make
 an announcement late or miss a thread whose activity happened while the gateway
@@ -154,6 +165,10 @@ an endpoint outage. Stream state is retained so a restart does not announce an
 already-live stream again. Streams continuously offline for the retention
 period are removed during Noor's hourly cleanup; a later live transition then
 correctly becomes a new notification.
+
+Thread snapshots are separate: they retain the rolling 30-day comparison
+window needed for thread-activity notifications. This is a pre-release schema;
+drop an existing Noor database before deploying this version.
 
 ## Docker
 

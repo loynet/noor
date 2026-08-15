@@ -40,7 +40,8 @@ type StreamsConfig struct {
 
 type fileConfig struct {
 	Telegram struct {
-		NotificationChatID int64 `toml:"notification_chat_id"`
+		NotificationChatID int64  `toml:"notification_chat_id"`
+		Locale             string `toml:"locale"`
 	} `toml:"telegram"`
 	Ptchan struct {
 		BaseURL string `toml:"base_url"`
@@ -103,6 +104,7 @@ func LoadConfig(path string) (Config, error) {
 			Target: raw.Telegram.NotificationChatID, BaseURL: strings.TrimSpace(raw.Ptchan.BaseURL),
 			MinReplyPosts:   raw.Threads.MinReplyPosts,
 			KeywordDenylist: raw.Threads.KeywordDenylist,
+			Locale:          strings.TrimSpace(raw.Telegram.Locale),
 		}},
 		Streams: StreamsConfig{Enabled: raw.Streams.Enabled},
 	}
@@ -111,6 +113,12 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("retention.completed_after must be a positive duration")
 	}
 	cfg.Threads.Config.EventRetention = cfg.Retention
+	if cfg.Threads.Config.Locale == "" {
+		cfg.Threads.Config.Locale = "en"
+	}
+	if cfg.Threads.Config.Locale != "en" && cfg.Threads.Config.Locale != "pt-PT" {
+		return Config{}, fmt.Errorf("telegram.locale must be en or pt-PT")
+	}
 	if raw.Threads.MaxThreadAge != "" {
 		cfg.Threads.Config.MaxThreadAge, err = time.ParseDuration(raw.Threads.MaxThreadAge)
 		if err != nil || cfg.Threads.Config.MaxThreadAge < 0 {
