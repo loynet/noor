@@ -129,6 +129,44 @@ func TestHighlightPriorityAndRanking(t *testing.T) {
 		t.Fatalf("%#v", due)
 	}
 }
+
+func TestGeneralHighlightsRequireTopTenPercent(t *testing.T) {
+	_, db, _, now := testWatcher(t, Config{MinReplyPosts: 1})
+	for i := 0; i < minimumSnapshots; i++ {
+		elapsed := 2 * time.Hour
+		if i == 0 {
+			elapsed = time.Hour
+		}
+		_, err := db.ExecContext(context.Background(), `INSERT INTO thread_snapshots (thread_key,threshold,board,elapsed_nanoseconds,acceleration_ppm,reply_characters,reply_attachments,capcode_replies,marta_replies,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, fmt.Sprintf("old:%d", i), 1, "test", elapsed.Nanoseconds(), -1, 0, 0, 0, 0, storage.Time(now.Add(-time.Hour)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	s := state{createdAt: now.Add(-90 * time.Minute), thresholdAt: now}
+	h, err := rankHighlight(context.Background(), tx, "current", 1, s, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Kind != "" {
+		t.Fatalf("top-19%% highlight = %#v", h)
+	}
+
+	s.createdAt = now.Add(-30 * time.Minute)
+	h, err = rankHighlight(context.Background(), tx, "current", 1, s, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Kind != localization.SpeedHighlight || h.Percent != topHighlightPercent {
+		t.Fatalf("top-10%% highlight = %#v", h)
+	}
+}
+
 func TestMartaAndCapcodeAreCounted(t *testing.T) {
 	w, db, _, now := testWatcher(t, Config{MinReplyPosts: 2})
 	if err := w.Consume(context.Background(), event("op", gateway.ThreadCreated, now, post(1, now.Add(-time.Minute)))); err != nil {
@@ -166,7 +204,7 @@ func TestPruneSnapshotsAfterThirtyDays(t *testing.T) {
 	}
 }
 
-func TestAccelerationGateAndConservativeCapcodeTie(t *testing.T) {
+func TestAccelerationGateAndCapcodeTie(t *testing.T) {
 	_, db, _, now := testWatcher(t, Config{MinReplyPosts: 10})
 	for i := 0; i < 25; i++ {
 		_, err := db.ExecContext(context.Background(), `INSERT INTO thread_snapshots (thread_key,threshold,board,elapsed_nanoseconds,acceleration_ppm,reply_characters,reply_attachments,capcode_replies,marta_replies,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, fmt.Sprintf("old:%d", i), 10, "test", (10 * time.Minute).Nanoseconds(), 1000000, 100, 10, 1, 0, storage.Time(now.Add(-time.Hour)))

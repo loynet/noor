@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	snapshotRetention = 30 * 24 * time.Hour
-	minimumSnapshots  = 10
+	snapshotRetention   = 30 * 24 * time.Hour
+	minimumSnapshots    = 10
+	topHighlightPercent = 10
 )
 
 type Config struct {
@@ -146,8 +147,7 @@ func (w *Watcher) Consume(ctx context.Context, event gateway.WebhookEvent) error
 			return err
 		}
 		if s.ignored == 0 && !event.ObservedAt.Before(bootstrapAt) {
-			elapsed := formatDuration(s.thresholdAt.Sub(s.createdAt))
-			text := localization.Thread(w.Config.Locale, localization.ThreadNotification{Board: s.board, ThreadID: s.threadID, Threshold: w.Config.MinReplyPosts, Elapsed: elapsed, URL: threadURL(w.Config.BaseURL, s.board, s.threadID), Highlight: highlight})
+			text := localization.Thread(w.Config.Locale, localization.ThreadNotification{Board: s.board, ThreadID: s.threadID, Threshold: w.Config.MinReplyPosts, Elapsed: s.thresholdAt.Sub(s.createdAt), URL: threadURL(w.Config.BaseURL, s.board, s.threadID), Highlight: highlight})
 			queued, err := notify.Enqueue(ctx, tx, "thread:"+key, w.Config.Target, text, now)
 			if err != nil {
 				if w.Metrics != nil {
@@ -244,17 +244,17 @@ func acceleration(s state, threshold int) int64 {
 }
 func rankHighlight(ctx context.Context, tx *sql.Tx, key string, threshold int, s state, now time.Time) (localization.Highlight, error) {
 	type candidate struct {
-		kind         localization.HighlightKind
-		metric       string
-		value        int64
-		lower        bool
-		limit, count int
+		kind   localization.HighlightKind
+		metric string
+		value  int64
+		lower  bool
+		count  int
 	}
 	accel := acceleration(s, threshold)
 	if threshold < 2 || s.thresholdAt.Sub(s.halfAt) > s.halfAt.Sub(s.createdAt)/2 {
 		accel = -1
 	}
-	items := []candidate{{localization.SpeedHighlight, "elapsed_nanoseconds", s.thresholdAt.Sub(s.createdAt).Nanoseconds(), true, 25, 0}, {localization.AccelerationHighlight, "acceleration_ppm", accel, true, 25, 0}, {localization.CapcodeHighlight, "capcode_replies", s.capcodeReplies, false, 5, int(s.capcodeReplies)}, {localization.MartaHighlight, "marta_replies", s.martaReplies, false, 5, int(s.martaReplies)}, {localization.LongFormHighlight, "reply_characters", s.replyCharacters, false, 25, 0}, {localization.MediaHighlight, "reply_attachments", s.replyAttachments, false, 25, 0}}
+	items := []candidate{{localization.SpeedHighlight, "elapsed_nanoseconds", s.thresholdAt.Sub(s.createdAt).Nanoseconds(), true, 0}, {localization.AccelerationHighlight, "acceleration_ppm", accel, true, 0}, {localization.CapcodeHighlight, "capcode_replies", s.capcodeReplies, false, int(s.capcodeReplies)}, {localization.MartaHighlight, "marta_replies", s.martaReplies, false, int(s.martaReplies)}, {localization.LongFormHighlight, "reply_characters", s.replyCharacters, false, 0}, {localization.MediaHighlight, "reply_attachments", s.replyAttachments, false, 0}}
 	for _, item := range items {
 		if item.value < 0 || ((item.kind == localization.CapcodeHighlight || item.kind == localization.MartaHighlight) && item.value == 0) {
 			continue
@@ -263,7 +263,7 @@ func rankHighlight(ctx context.Context, tx *sql.Tx, key string, threshold int, s
 		if err != nil {
 			return localization.Highlight{}, err
 		}
-		if ok && percent <= item.limit {
+		if ok && percent <= topHighlightPercent {
 			return localization.Highlight{Kind: item.kind, Percent: percent, Count: item.count}, nil
 		}
 	}
@@ -291,15 +291,6 @@ func rank(ctx context.Context, tx *sql.Tx, key string, threshold int, metric str
 
 func threadURL(base, board string, id int64) string {
 	return fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(base, "/"), board, id)
-}
-func formatDuration(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	if d >= time.Hour && d%time.Hour == 0 {
-		return fmt.Sprintf("%dh", int(d/time.Hour))
-	}
-	return fmt.Sprintf("%dm", int(d/time.Minute))
 }
 func bootstrap(ctx context.Context, tx *sql.Tx) (time.Time, error) {
 	var raw string

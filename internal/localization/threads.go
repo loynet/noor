@@ -1,6 +1,10 @@
 package localization
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 type HighlightKind string
 
@@ -18,28 +22,68 @@ type Highlight struct {
 	Percent, Count int
 }
 type ThreadNotification struct {
-	Board        string
-	ThreadID     int64
-	Threshold    int
-	Elapsed, URL string
-	Highlight    Highlight
+	Board     string
+	ThreadID  int64
+	Threshold int
+	Elapsed   time.Duration
+	URL       string
+	Highlight Highlight
 }
 
 func Thread(locale string, n ThreadNotification) string {
 	var text string
 	if locale == "pt-PT" {
-		text = fmt.Sprintf("/%s/ #%d - Atingiu %d respostas em %s", n.Board, n.ThreadID, n.Threshold, n.Elapsed)
+		text = fmt.Sprintf("/%s/ #%d - Atingiu %d respostas em %s", n.Board, n.ThreadID, n.Threshold, formatDuration(locale, n.Elapsed))
 		if line := portuguese(n.Highlight); line != "" {
 			text += "\n" + line
 		}
 	} else {
-		text = fmt.Sprintf("/%s/ #%d - Reached %d replies in %s", n.Board, n.ThreadID, n.Threshold, n.Elapsed)
+		text = fmt.Sprintf("/%s/ #%d - Reached %d replies in %s", n.Board, n.ThreadID, n.Threshold, formatDuration(locale, n.Elapsed))
 		if line := english(n.Highlight); line != "" {
 			text += "\n" + line
 		}
 	}
 	return text + "\n" + n.URL
 }
+
+func formatDuration(locale string, d time.Duration) string {
+	if d < time.Minute {
+		if locale == "pt-PT" {
+			return "menos de um minuto"
+		}
+		return "less than a minute"
+	}
+	d = d.Truncate(time.Minute)
+	units := []struct {
+		duration   time.Duration
+		english    [2]string
+		portuguese [2]string
+	}{
+		{7 * 24 * time.Hour, [2]string{"week", "weeks"}, [2]string{"semana", "semanas"}},
+		{24 * time.Hour, [2]string{"day", "days"}, [2]string{"dia", "dias"}},
+		{time.Hour, [2]string{"hour", "hours"}, [2]string{"hora", "horas"}},
+		{time.Minute, [2]string{"minute", "minutes"}, [2]string{"minuto", "minutos"}},
+	}
+	parts := make([]string, 0, len(units))
+	for _, unit := range units {
+		count := d / unit.duration
+		if count == 0 {
+			continue
+		}
+		d %= unit.duration
+		words := unit.english
+		if locale == "pt-PT" {
+			words = unit.portuguese
+		}
+		word := words[1]
+		if count == 1 {
+			word = words[0]
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", count, word))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func english(h Highlight) string {
 	switch h.Kind {
 	case SpeedHighlight:

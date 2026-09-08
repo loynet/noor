@@ -82,6 +82,8 @@ and may add one localized highlight for speed, acceleration, Capcode or Marta
 activity, long replies, or attachments. Snapshot retention is always 30 days,
 independently of event-receipt retention.
 
+Every highlight requires a top-10% ranking.
+
 `threads.min_reply_posts` must be at least 1. Telegram notifications use
 English by default; set `telegram.locale` to `pt-PT` for Portuguese.
 
