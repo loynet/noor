@@ -146,7 +146,7 @@ func (w *Watcher) Consume(ctx context.Context, event gateway.WebhookEvent) error
 		if err != nil {
 			return err
 		}
-		if s.ignored == 0 && !event.ObservedAt.Before(bootstrapAt) {
+		if s.ignored == 0 && !event.ObservedAt.Before(bootstrapAt) && (w.Config.MaxThreadAge == 0 || now.Sub(s.createdAt) <= w.Config.MaxThreadAge) {
 			text := localization.Thread(w.Config.Locale, localization.ThreadNotification{Board: s.board, ThreadID: s.threadID, Threshold: w.Config.MinReplyPosts, Elapsed: s.thresholdAt.Sub(s.createdAt), URL: threadURL(w.Config.BaseURL, s.board, s.threadID), Highlight: highlight})
 			queued, err := notify.Enqueue(ctx, tx, "thread:"+key, w.Config.Target, text, now)
 			if err != nil {
@@ -196,7 +196,7 @@ func loadState(ctx context.Context, tx *sql.Tx, key string, s *state) error {
 	return nil
 }
 func storeState(ctx context.Context, tx *sql.Tx, key string, s state, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO watched_threads (thread_key,board,thread_id,created_at,last_seen_at,replies,ignored,has_op,half_at,threshold_at,reply_characters,reply_attachments,capcode_replies,marta_replies,completed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(thread_key) DO UPDATE SET last_seen_at=excluded.last_seen_at,replies=excluded.replies,ignored=excluded.ignored,has_op=excluded.has_op,half_at=excluded.half_at,threshold_at=excluded.threshold_at,reply_characters=excluded.reply_characters,reply_attachments=excluded.reply_attachments,capcode_replies=excluded.capcode_replies,marta_replies=excluded.marta_replies,completed=excluded.completed`, key, s.board, s.threadID, storage.Time(s.createdAt), storage.Time(now), s.replies, s.ignored, s.hasOP, nullableTime(s.halfAt), nullableTime(s.thresholdAt), s.replyCharacters, s.replyAttachments, s.capcodeReplies, s.martaReplies, s.completed)
+	_, err := tx.ExecContext(ctx, `INSERT INTO watched_threads (thread_key,board,thread_id,created_at,last_seen_at,replies,ignored,has_op,half_at,threshold_at,reply_characters,reply_attachments,capcode_replies,marta_replies,completed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(thread_key) DO UPDATE SET created_at=excluded.created_at,last_seen_at=excluded.last_seen_at,replies=excluded.replies,ignored=excluded.ignored,has_op=excluded.has_op,half_at=excluded.half_at,threshold_at=excluded.threshold_at,reply_characters=excluded.reply_characters,reply_attachments=excluded.reply_attachments,capcode_replies=excluded.capcode_replies,marta_replies=excluded.marta_replies,completed=excluded.completed`, key, s.board, s.threadID, storage.Time(s.createdAt), storage.Time(now), s.replies, s.ignored, s.hasOP, nullableTime(s.halfAt), nullableTime(s.thresholdAt), s.replyCharacters, s.replyAttachments, s.capcodeReplies, s.martaReplies, s.completed)
 	if err != nil {
 		return fmt.Errorf("store watched thread: %w", err)
 	}

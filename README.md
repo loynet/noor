@@ -72,6 +72,9 @@ the gateway has accepted and committed. It
 tracks each thread, applies its configured filters, and queues a single
 announcement after the thread reaches its reply threshold. Keyword deny lists,
 an optional maximum thread age, and the threshold are explicit product policy.
+The age limit is checked when its creation event is processed and again before
+queuing the announcement, so a thread that reaches the threshold too late is
+not announced.
 Board admission belongs to ptchan-gateway's integration policy.
 
 Noor records one immutable snapshot when every

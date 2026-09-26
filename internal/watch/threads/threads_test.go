@@ -106,6 +106,65 @@ func TestFilteredThreadSnapshotsWithoutNotification(t *testing.T) {
 		t.Fatal(len(due))
 	}
 }
+
+func TestThreadPastMaxAgeAtThresholdDoesNotNotify(t *testing.T) {
+	w, db, q, now := testWatcher(t, Config{MinReplyPosts: 1, MaxThreadAge: 24 * time.Hour})
+	op := post(1, now)
+	if err := w.Consume(context.Background(), event("op", gateway.ThreadCreated, now, op)); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(4 * 24 * time.Hour)
+	w.Now = func() time.Time { return later }
+	if err := w.Consume(context.Background(), event("reply", gateway.PostCreated, later, post(2, later))); err != nil {
+		t.Fatal(err)
+	}
+	due, err := q.Due(context.Background(), later, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("queued %d notifications for an old thread", len(due))
+	}
+	var snapshots int
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM thread_snapshots`).Scan(&snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots != 1 {
+		t.Fatalf("snapshots = %d, want 1", snapshots)
+	}
+}
+
+func TestReorderedCreationKeepsOriginalAgeLimit(t *testing.T) {
+	w, db, q, created := testWatcher(t, Config{MinReplyPosts: 2, MaxThreadAge: 24 * time.Hour})
+	firstReply := created.Add(10 * time.Minute)
+	w.Now = func() time.Time { return firstReply }
+	if err := w.Consume(context.Background(), event("reply-1", gateway.PostCreated, firstReply, post(2, firstReply))); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Consume(context.Background(), event("op", gateway.ThreadCreated, firstReply, post(1, created))); err != nil {
+		t.Fatal(err)
+	}
+	var storedCreated string
+	if err := db.QueryRowContext(context.Background(), `SELECT created_at FROM watched_threads WHERE thread_key = 'test:1'`).Scan(&storedCreated); err != nil {
+		t.Fatal(err)
+	}
+	if storedCreated != storage.Time(created) {
+		t.Fatalf("stored creation time = %s, want %s", storedCreated, storage.Time(created))
+	}
+	threshold := created.Add(24*time.Hour + 5*time.Minute)
+	w.Now = func() time.Time { return threshold }
+	if err := w.Consume(context.Background(), event("reply-2", gateway.PostCreated, threshold, post(3, threshold))); err != nil {
+		t.Fatal(err)
+	}
+	due, err := q.Due(context.Background(), threshold, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("queued %d notifications for an old thread", len(due))
+	}
+}
+
 func TestHighlightPriorityAndRanking(t *testing.T) {
 	w, db, q, now := testWatcher(t, Config{MinReplyPosts: 2})
 	for i := 0; i < 25; i++ {
