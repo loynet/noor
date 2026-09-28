@@ -8,8 +8,8 @@ It has two watchers:
 
 - `threads` consumes signed events from ptchan-gateway and creates a
   notification when an eligible thread reaches a configured reply threshold.
-- `streams` polls configured stream probes and creates a notification for the
-  transition from offline to live.
+- `streams` polls ptchan's public stream status and notifies when it goes live
+  or the live name changes.
 
 The notifier delivers queued notifications to Telegram. Watching and delivery
 are deliberately separate: a watcher decides that something matters; the
@@ -18,12 +18,13 @@ notifier makes the announcement reliable.
 Noor deliberately does **not**:
 
 - answer messages, call language models, or retain conversations;
-- fetch from or post to ptchan directly;
+- fetch ptchan threads or post to ptchan directly;
 - make notification policy depend on Telegram details; or
 - treat an event as delivered merely because it was observed.
 
-ptchan-gateway remains Noor's only ptchan boundary. It supplies signed webhook
-events and any sanctioned, sanitized ptchan data Noor needs.
+ptchan-gateway supplies signed thread events and any other sanitized thread
+data Noor needs. The streams watcher reads only ptchan's public stream-status
+JSON directly.
 
 ## Design principles
 
@@ -103,15 +104,11 @@ correctness and then pruned.
 
 ### Stream notifications
 
-The streams watcher records, but does not announce, each stream's initial
-observed state. It then announces once when a stream moves from offline to live.
-A short offline debounce
-prevents a transient probe failure from resetting that decision; sustained
-absence returns the stream to offline and makes a later live transition
-eligible for one new announcement.
-
-The probe URL is for machine liveness checks, while the page URL is the link
-people receive. Those two purposes stay separate in configuration and code.
+The streams watcher records its first observation without announcing it. It
+then alerts on `false` to `true` or a change in the live `name`. Repeated
+observations stay quiet. `{"live":false}` marks the stream offline immediately;
+failed or invalid reads leave the last state unchanged. The live name forms
+the link `https://miau.gg/<name>`.
 
 ## Project shape
 
@@ -144,8 +141,10 @@ unknown TOML keys and invalid enabled-watcher configuration stop Noor before it
 starts.
 
 Set either `threads.enabled` or `streams.enabled` to `false` to run only the
-other watcher. A streams-only process does not need a gateway secret; a
-threads-only process does not need stream channels.
+other watcher. A streams-only process does not need a gateway secret. Remove
+old `[[streams.channel]]` entries: Noor now polls `https://ptch.net/stream.json`.
+Stop Noor and drop its SQLite database before deploying this schema change;
+pending notifications and thread state will be lost.
 
 The gateway integration must send signed events to Noor's stable
 `/internal/ptchan/events` endpoint.
@@ -166,14 +165,10 @@ the example retains completed state for one week. The same duration is Noor's
 maximum accepted gateway-event age: a delivery older than that is acknowledged
 and ignored. This makes cleanup safe even though ptchan-gateway can retain a
 pending delivery indefinitely, and deliberately limits how long Noor supports
-an endpoint outage. Stream state is retained so a restart does not announce an
-already-live stream again. Streams continuously offline for the retention
-period are removed during Noor's hourly cleanup; a later live transition then
-correctly becomes a new notification.
+an endpoint outage. The single stream-status row is retained across restarts.
 
 Thread snapshots are separate: they retain the rolling 30-day comparison
-window needed for thread-activity notifications. This is a pre-release schema;
-drop an existing Noor database before deploying this version.
+window needed for thread-activity notifications.
 
 ## Docker
 
@@ -226,10 +221,6 @@ goroutine metrics. Its application metrics are:
 - `noor_notification_oldest_pending_seconds`
 
 Metrics never include thread/event IDs, chat IDs, text, URLs, or secrets.
-
-Noor's SQLite state is disposable. It is safe to drop the database when an
-incompatible schema change is deployed; Noor will rebuild its state from new
-gateway events and stream probes.
 
 ## License
 

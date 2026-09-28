@@ -30,17 +30,8 @@ max_thread_age = "0s"
 [streams]
 # Enable periodic stream liveness observation.
 enabled = true
-# Delay between liveness probes for every configured channel.
-poll_interval = "1m"
-
-[[streams.channel]]
-# Stable local identity for this stream. It persists across URL changes and is
-# distinct from either URL below.
-key = "main"
-# Machine-facing endpoint where HTTP 200 means the stream is live.
-probe_url = "https://stream.example.com/main/llhls.m3u8"
-# Human-facing page sent in the notification.
-page_url = "https://example.com/main"
+# Delay between reads of ptchan's stream status (default: 5m).
+poll_interval = "5m"
 
 [storage]
 # Relative paths are resolved from Noor's working directory. Docker mounts its

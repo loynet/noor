@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"noor/internal/watch/streams"
 	"noor/internal/watch/threads"
 )
 
@@ -35,7 +33,6 @@ type ThreadsConfig struct {
 type StreamsConfig struct {
 	Enabled  bool
 	Interval time.Duration
-	Channels []streams.Channel
 }
 
 type fileConfig struct {
@@ -61,11 +58,6 @@ type fileConfig struct {
 	Streams struct {
 		Enabled      bool   `toml:"enabled"`
 		PollInterval string `toml:"poll_interval"`
-		Channels     []struct {
-			Key      string `toml:"key"`
-			ProbeURL string `toml:"probe_url"`
-			PageURL  string `toml:"page_url"`
-		} `toml:"channel"`
 	} `toml:"streams"`
 	Runtime struct {
 		HTTPAddr string `toml:"http_addr"`
@@ -106,7 +98,7 @@ func LoadConfig(path string) (Config, error) {
 			KeywordDenylist: raw.Threads.KeywordDenylist,
 			Locale:          strings.TrimSpace(raw.Telegram.Locale),
 		}},
-		Streams: StreamsConfig{Enabled: raw.Streams.Enabled},
+		Streams: StreamsConfig{Enabled: raw.Streams.Enabled, Interval: 5 * time.Minute},
 	}
 	cfg.Retention, err = time.ParseDuration(raw.Retention.CompletedAfter)
 	if err != nil || cfg.Retention <= 0 {
@@ -131,33 +123,12 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, fmt.Errorf("streams.poll_interval must be a positive duration")
 		}
 	}
-	for _, channel := range raw.Streams.Channels {
-		key := strings.TrimSpace(channel.Key)
-		if key == "" {
-			return Config{}, fmt.Errorf("streams.channel.key is required")
-		}
-		if err := validURL(channel.ProbeURL); err != nil {
-			return Config{}, fmt.Errorf("stream %q probe_url: %w", key, err)
-		}
-		if err := validURL(channel.PageURL); err != nil {
-			return Config{}, fmt.Errorf("stream %q page_url: %w", key, err)
-		}
-		for _, previous := range cfg.Streams.Channels {
-			if previous.Key == key {
-				return Config{}, fmt.Errorf("streams.channel key %q is duplicated", key)
-			}
-		}
-		cfg.Streams.Channels = append(cfg.Streams.Channels, streams.Channel{Key: key, ProbeURL: strings.TrimSpace(channel.ProbeURL), PageURL: strings.TrimSpace(channel.PageURL)})
-	}
 	if cfg.Threads.Enabled {
 		name := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(raw.Gateway.IntegrationName)))
 		cfg.Threads.Secret = strings.TrimSpace(os.Getenv("PTCHAN_INTEGRATION_" + name + "_SECRET"))
 		if cfg.Threads.Secret == "" || cfg.WebhookAddr == "" || cfg.Threads.Config.MinReplyPosts < 1 || cfg.Threads.Config.BaseURL == "" {
 			return Config{}, fmt.Errorf("enabled threads watcher requires ptchan.base_url, webhook address, integration secret, and min_reply_posts")
 		}
-	}
-	if cfg.Streams.Enabled && (cfg.Streams.Interval == 0 || len(cfg.Streams.Channels) == 0) {
-		return Config{}, fmt.Errorf("enabled streams watcher requires poll_interval and at least one channel")
 	}
 	if (cfg.Threads.Enabled || cfg.Streams.Enabled) && (cfg.SQLitePath == "" || cfg.TelegramToken == "" || raw.Telegram.NotificationChatID == 0) {
 		return Config{}, fmt.Errorf("enabled watchers require storage.sqlite_path, TELEGRAM_BOT_TOKEN, and telegram.notification_chat_id")
@@ -169,14 +140,6 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("enable at least one watcher")
 	}
 	return cfg, nil
-}
-
-func validURL(value string) error {
-	parsed, err := url.ParseRequestURI(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return fmt.Errorf("must be an absolute http or https URL")
-	}
-	return nil
 }
 
 func cleanPath(value string) string {

@@ -5,13 +5,14 @@ has two watchers and one notification delivery path:
 
 - The **threads watcher** turns signed ptchan-gateway events into a notification
   request when a thread becomes active enough to matter.
-- The **streams watcher** detects when a configured broadcast has gone live and
+- The **streams watcher** detects when ptchan's current broadcast has gone live and
   creates a notification request for that transition.
 - The **notifier** delivers those durable requests to configured destinations.
 
 Noor is deliberately not a general community bot, an assistant, a scraper, or
-a ptchan client. Keep the boundary sharp. New ptchan behaviour belongs behind
-ptchan-gateway; Noor must not fetch from or post to ptchan directly.
+a ptchan client. Keep the boundary sharp. Thread behavior belongs behind
+ptchan-gateway; Noor must not fetch threads from or post to ptchan directly.
+The streams watcher may read only ptchan's public `/stream.json` status feed.
 
 ## Philosophy
 
@@ -68,8 +69,8 @@ This repository should stay small, direct, and idiomatic. Follow
 - `internal/storage` owns SQLite connection setup and low-level schema helpers
   only; it must not become a domain layer.
 - The official `github.com/loynet/ptchan-gateway/clients/go` SDK owns the
-  signed webhook DTOs and protocol. Noor uses ptchan-gateway rather than
-  ptchan directly and must not duplicate that contract locally.
+  signed webhook DTOs and protocol. Noor uses ptchan-gateway for thread data
+  and must not duplicate that contract locally.
 - `internal/telegram` turns a notification into a Telegram request. Telegram
   rendering and Bot API details do not belong in either watcher.
 - Delivery transports must not decide watcher eligibility. If another
@@ -94,11 +95,11 @@ This repository should stay small, direct, and idiomatic. Follow
   Telegram has no universal delivery idempotency key, so unknown outcomes are
   retried and delivery is explicitly at-least-once: duplicates are possible.
 - Keep watcher policy explicit. Thread thresholds,
-  allow/deny rules, age limits, stream liveness criteria, and offline debounce
+  allow/deny rules, age limits, and stream liveness criteria
   are product rules—not generic infrastructure knobs.
 - Define restart semantics deliberately. In particular, a fresh threads
   watcher must not announce historical events merely because it has no state;
-  a streams watcher must not repeatedly announce an already-live stream.
+  a streams watcher must not repeatedly announce the same live stream name.
 - Retention is required for durable state. Pruning must preserve every record
   still needed for idempotency or pending delivery.
 

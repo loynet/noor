@@ -46,7 +46,7 @@ func Run(ctx context.Context, cfg Config) error {
 	var threadsWatcher *threads.Watcher
 	var streamsWatcher *streams.Watcher
 	if cfg.Streams.Enabled {
-		streamsWatcher = &streams.Watcher{Channels: cfg.Streams.Channels, Target: cfg.NotificationChatID, DB: db, Metrics: metrics}
+		streamsWatcher = &streams.Watcher{Target: cfg.NotificationChatID, DB: db, Metrics: metrics}
 		if err := streamsWatcher.Initialize(ctx); err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		workers = append(workers, gatewayServer(listener, cfg.Threads.Secret, threadsWatcher, metrics))
 	}
-	workers = append(workers, cleanupWorker(queue, threadsWatcher, streamsWatcher, cfg.Retention))
+	workers = append(workers, cleanupWorker(queue, threadsWatcher, cfg.Retention))
 	ready.Store(true)
 	var group sync.WaitGroup
 	workerErrors := make(chan error, len(workers))
@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-func cleanupWorker(queue *notify.Store, threadsWatcher *threads.Watcher, streamsWatcher *streams.Watcher, retention time.Duration) func(context.Context) error {
+func cleanupWorker(queue *notify.Store, threadsWatcher *threads.Watcher, retention time.Duration) func(context.Context) error {
 	return func(ctx context.Context) error {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -97,11 +97,6 @@ func cleanupWorker(queue *notify.Store, threadsWatcher *threads.Watcher, streams
 			}
 			if threadsWatcher != nil {
 				if _, err := threadsWatcher.PruneBefore(ctx, cutoff); err != nil {
-					return err
-				}
-			}
-			if streamsWatcher != nil {
-				if _, err := streamsWatcher.PruneInactiveBefore(ctx, cutoff); err != nil {
 					return err
 				}
 			}

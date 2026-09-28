@@ -3,32 +3,30 @@ package streams
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
+	"unicode"
 
 	"noor/internal/notify"
 	"noor/internal/storage"
 )
 
-const missedProbesBeforeOffline = 2
-
-type Channel struct {
-	Key      string
-	ProbeURL string
-	PageURL  string
-}
+const viewerBaseURL = "https://miau.gg/"
+const maxStatusBytes = 4096
+const statusURL = "https://ptch.net/stream.json"
 
 type Watcher struct {
-	Channels []Channel
-	Target   int64
-	DB       *storage.DB
-	Client   *http.Client
-	Now      func() time.Time
-	Logger   *slog.Logger
-	Metrics  interface {
+	Target  int64
+	DB      *storage.DB
+	Client  *http.Client
+	Now     func() time.Time
+	Logger  *slog.Logger
+	Metrics interface {
 		ObserveStreamProbe(string)
 		ObserveNotificationEnqueue(string, string)
 	}
@@ -37,11 +35,10 @@ type Watcher struct {
 func (w *Watcher) Initialize(ctx context.Context) error {
 	_, err := w.DB.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS streams (
-  stream_key TEXT PRIMARY KEY,
-  active INTEGER NOT NULL,
-  misses INTEGER NOT NULL,
-  epoch INTEGER NOT NULL,
-  inactive_since TEXT
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  live INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  epoch INTEGER NOT NULL
 );`)
 	if err != nil {
 		return fmt.Errorf("create streams schema: %w", err)
@@ -82,99 +79,99 @@ func (w *Watcher) logger() *slog.Logger {
 }
 
 func (w *Watcher) Poll(ctx context.Context) error {
-	var errs []error
-	for _, channel := range w.Channels {
-		live, err := w.isLive(ctx, channel)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("probe %s: %w", channel.Key, err))
-			continue
-		}
-		if err := w.record(ctx, channel, live); err != nil {
-			errs = append(errs, err)
-		}
+	status, err := w.fetchStatus(ctx)
+	if err != nil {
+		return err
 	}
-	return errors.Join(errs...)
+	return w.record(ctx, status)
 }
 
-// PruneInactiveBefore removes streams that have remained offline long enough.
-// Live streams retain their row so a restart cannot re-announce them.
-func (w *Watcher) PruneInactiveBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	result, err := w.DB.ExecContext(ctx, `DELETE FROM streams WHERE active = 0 AND inactive_since < ?`, storage.Time(cutoff))
-	if err != nil {
-		return 0, fmt.Errorf("clean up inactive streams: %w", err)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("count cleaned inactive streams: %w", err)
-	}
-	return count, nil
+type streamStatus struct {
+	Live *bool  `json:"live"`
+	Name string `json:"name"`
 }
 
-func (w *Watcher) isLive(ctx context.Context, channel Channel) (bool, error) {
+func (w *Watcher) fetchStatus(ctx context.Context) (streamStatus, error) {
 	client := w.Client
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, channel.ProbeURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
 	if err != nil {
-		return false, fmt.Errorf("create request: %w", err)
+		return streamStatus{}, fmt.Errorf("create stream status request: %w", err)
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("send request: %w", err)
+		return streamStatus{}, fmt.Errorf("request stream status: %w", err)
 	}
 	defer response.Body.Close()
-	switch response.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, fmt.Errorf("unexpected status: %s", response.Status)
+	if response.StatusCode != http.StatusOK {
+		return streamStatus{}, fmt.Errorf("stream status returned HTTP %d", response.StatusCode)
 	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxStatusBytes+1))
+	if err != nil {
+		return streamStatus{}, fmt.Errorf("read stream status: %w", err)
+	}
+	if len(body) > maxStatusBytes {
+		return streamStatus{}, fmt.Errorf("stream status exceeds %d bytes", maxStatusBytes)
+	}
+	var status streamStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return streamStatus{}, fmt.Errorf("decode stream status: %w", err)
+	}
+	if status.Live == nil {
+		return streamStatus{}, fmt.Errorf("stream status missing live field")
+	}
+	if *status.Live && !validName(status.Name) {
+		return streamStatus{}, fmt.Errorf("stream status has invalid live name")
+	}
+	return status, nil
 }
 
-func (w *Watcher) record(ctx context.Context, channel Channel, live bool) error {
+func validName(name string) bool {
+	if len(name) == 0 || len(name) > 128 || name == "." || name == ".." {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.IsSpace(r) || r == '/' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *Watcher) record(ctx context.Context, status streamStatus) error {
+	live := *status.Live
 	tx, err := w.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin stream update: %w", err)
 	}
 	defer tx.Rollback()
-	var active, misses, epoch int
-	var inactiveSince sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT active, misses, epoch, inactive_since FROM streams WHERE stream_key = ?`, channel.Key).Scan(&active, &misses, &epoch, &inactiveSince)
+	var active, epoch int
+	var name string
+	err = tx.QueryRowContext(ctx, `SELECT live, name, epoch FROM streams WHERE id = 1`).Scan(&active, &name, &epoch)
 	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("load stream %s: %w", channel.Key, err)
+		return fmt.Errorf("load stream: %w", err)
 	}
 	firstObservation := err == sql.ErrNoRows
 	wasLive := active != 0
 	now := w.now()
-	if firstObservation {
-		if live {
-			active = 1
-		} else {
-			inactiveSince = sql.NullString{String: storage.Time(now), Valid: true}
-		}
-	} else if live {
-		active, misses = 1, 0
-		inactiveSince = sql.NullString{}
-		if !wasLive {
-			epoch++
-		}
-	} else if wasLive {
-		misses++
-		if misses >= missedProbesBeforeOffline {
-			active, misses = 0, 0
-			inactiveSince = sql.NullString{String: storage.Time(now), Valid: true}
-		}
+	announce := !firstObservation && live && (!wasLive || name != status.Name)
+	if announce {
+		epoch++
+	}
+	if live {
+		name = status.Name
+	} else {
+		name = ""
 	}
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO streams (stream_key, active, misses, epoch, inactive_since) VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(stream_key) DO UPDATE SET active = excluded.active, misses = excluded.misses, epoch = excluded.epoch, inactive_since = excluded.inactive_since`, channel.Key, active, misses, epoch, inactiveSince); err != nil {
-		return fmt.Errorf("store stream %s: %w", channel.Key, err)
+INSERT INTO streams (id, live, name, epoch) VALUES (1, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET live = excluded.live, name = excluded.name, epoch = excluded.epoch`, storage.Bool(live), name, epoch); err != nil {
+		return fmt.Errorf("store stream: %w", err)
 	}
-	if live && !wasLive && !firstObservation {
-		if _, err := notify.Enqueue(ctx, tx, fmt.Sprintf("stream:%s:%d", channel.Key, epoch), w.Target, "🔴 Stream live\n"+channel.PageURL, now); err != nil {
+	if announce {
+		if _, err := notify.Enqueue(ctx, tx, fmt.Sprintf("stream:%d", epoch), w.Target, "🔴 Stream live\n"+viewerBaseURL+url.PathEscape(status.Name), now); err != nil {
 			if w.Metrics != nil {
 				w.Metrics.ObserveNotificationEnqueue("streams", "error")
 			}
